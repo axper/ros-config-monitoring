@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<users>
+	<user username="admin">
+        <realname>Real Admin</realname>
+    </user>
+    <user username="joe">
+        <realname>Little Joe</realname>
+    </user>
+    <user username="UNKNOWN">
+        <realname>UNKNOWN USER</realname>
+    </user>
+</users>
