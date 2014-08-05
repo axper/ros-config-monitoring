@@ -42,6 +42,7 @@ except NameError:
 
 
 username_unknown = 'UNKNOWN'
+BUFFER_SIZE = 500
 
 
 def create_backup(filename):
@@ -187,17 +188,20 @@ class Watch(object):
         conf_instance.write_config_change()
 
         client = transport.open_session()
+
+        print('Connection successful, listening for config changes...')
+
         client.exec_command('/log print follow-only')
 
         while not client.exit_status_ready():
             if client.recv_ready():
-                recovered = client.recv(500)
+                recovered = client.recv(BUFFER_SIZE)
 
                 for line in recovered.splitlines():
                     self.log_line_processor(line)
 
             if client.recv_stderr_ready():
-                print('Stderr:', str(client.recv_stderr(500)))
+                print('Stderr:', str(client.recv_stderr(BUFFER_SIZE)))
 
             time.sleep(0.05)
 
