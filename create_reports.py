@@ -23,7 +23,6 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
 
-
 from __future__ import print_function
 import sys
 import time
@@ -32,11 +31,6 @@ import shutil
 import os
 import xml.etree.ElementTree
 
-
-
-latex_command = 'xelatex'
-backup_dir_name = 'report_backups'
-config_dir_name = 'config_backups'
 
 
 def create_backup(filename):
@@ -75,14 +69,40 @@ def get_users_from_file(filename):
 
     for user_info in root:
         username = user_info.get('username')
-        realname = user_info.find('realname').text
+        realname = user_info.find('realname').text.encode('utf-8')
 
         users_dict[username] = realname
 
     return users_dict
 
 
+def compile_latex(filename_tex):
+    ''' Compiles the filename_tex to PDF using xelatex
+        LaTeX distribution is first searched in $PATH.
+        If not found, it looks for a local miktex_portable directory.
+    '''
+    try:
+        subprocess.call(['xelatex', filename_tex])
+    except OSError:
+        print('Did not find xelatex in $PATH, looking for dir miktex_porable')
+        try:
+            subprocess.call(['miktex_portable\\miktex\\bin\\xelatex.exe',
+                             filename_tex])
+        except OSError:
+            print('Could not find local porable directory either. Aborting')
+            sys.exit(1)
+
+
+def view_file(filename):
+    ''' Opens a file in OS's default file viewer '''
+    if sys.platform.startswith('linux'):
+        subprocess.call(['xdg-open', filename])
+    else:
+        os.startfile(filename)
+
+
 def create_report(user, realname):
+    ''' Reads user's diff file and generates PDF report and opens the file '''
     print('Generating report for "' + user, '" (' + realname + '):')
 
     filename_user_diff = user + '_diff.txt'
@@ -100,29 +120,22 @@ def create_report(user, realname):
     with open('nameit.txt', 'w') as nameit:
         nameit.write(realname)
 
-    # Generate LaTeX report
-    if subprocess.call([latex_command, 'report.tex']) != 0:
-        print('Could not execute', latex_command, '!!!')
-        exit()
-
+    compile_latex('report.tex')
 
     filename_user_report = user + '_report.pdf'
     move('report.pdf', filename_user_report)
     file_report_backup = create_backup(filename_user_report)
 
 
-    # Open file
-    if sys.platform.startswith('linux'):
-        subprocess.call(['xdg-open', file_report_backup])
-    else:
-        os.startfile(file_report_backup)
+    view_file(file_report_backup)
 
 
 def main():
+    ''' Main function '''
     users = get_users_from_file('users.xml')
 
     for user in users.keys():
-        create_report(user, users[user])
+        create_report(user, users[user].decode())
 
 
 if __name__ == '__main__':

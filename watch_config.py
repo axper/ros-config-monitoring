@@ -23,7 +23,6 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
 
-
 from __future__ import print_function
 import paramiko
 import os
@@ -31,18 +30,7 @@ import shutil
 import time
 import difflib
 import getpass
-import multiprocessing
-
-
-# Portabilitiy between 2 and 3
-try:
-    input = raw_input
-except NameError:
-    pass
-
-
-username_unknown = 'UNKNOWN'
-BUFFER_SIZE = 500
+import threading
 
 
 def create_backup(filename):
@@ -53,7 +41,7 @@ def create_backup(filename):
     if not os.path.exists(backup_dir):
         os.makedirs(backup_dir)
 
-    backup_filename = time.strftime("%d.%m.%Y_%H.%M.%S") + '__' + filename
+    backup_filename = time.strftime('%d.%m.%Y_%H.%M.%S') + '__' + filename
     backup_full_path = os.path.join(backup_dir, backup_filename)
     shutil.copy2(filename, backup_full_path)
 
@@ -79,10 +67,31 @@ class Config(object):
         '''
         stdin, stdout, stderr = self.client.exec_command('/export compact')
 
-        print(stderr.read(), end='')
+        stderr_text = stderr.read().decode()
+        if stderr_text:
+            with open('stderr.txt') as file_stderr_log:
+                file_stderr_log.write(stderr_text)
 
         new_config_raw = stdout.read()
-        new_config = new_config_raw.replace('\\\r\n    ', '')
+        new_config_string = new_config_raw.decode()
+        new_config_full_lines = new_config_string.replace('\\\r\n    ', '')
+
+        new_config = ''
+        top_command = ''
+
+        for line in new_config_full_lines.splitlines():
+            if not line:
+                continue
+
+            if line[0] == '#':
+                new_config += line + '\n'
+                continue
+
+            if line[0] == '/':
+                top_command = line
+                continue
+
+            new_config += top_command + ' ' + line + '\n'
 
         return new_config
 
@@ -172,7 +181,7 @@ class Watch(object):
                 'removed by' in log_line):
             print(log_line)
             username_changer = log_line.split()[-1]
-            print('Config changed by', username_changer, ':')
+            print('Config changed by', username_changer + ':')
 
             conf_instance = Config(self.client, username_changer)
             conf_instance.write_config_change()
@@ -184,24 +193,21 @@ class Watch(object):
         transport = self.client.get_transport()
 
         # Just in case check if there were changes while program was down
-        conf_instance = Config(self.client, username_unknown)
+        conf_instance = Config(self.client, 'UNKNOWN')
         conf_instance.write_config_change()
 
         client = transport.open_session()
-
-        print('Connection successful, listening for config changes...')
-
         client.exec_command('/log print follow-only')
 
         while not client.exit_status_ready():
             if client.recv_ready():
-                recovered = client.recv(BUFFER_SIZE)
+                recovered = client.recv(500)
 
                 for line in recovered.splitlines():
                     self.log_line_processor(line)
 
             if client.recv_stderr_ready():
-                print('Stderr:', str(client.recv_stderr(BUFFER_SIZE)))
+                print('Stderr:', str(client.recv_stderr(500)))
 
             time.sleep(0.05)
 
@@ -225,19 +231,16 @@ def connect(hostname, username_auditor, passw):
 
 def main():
     ''' Main loop '''
-    jobs = []
 
     while True:
-        host = input('Hostname:')
-
-        username_auditor = input('Username:')
-
+        host = raw_input('Hostname:')
+        username_auditor = raw_input('Username:')
         passw = getpass.getpass('Password:')
 
-        proc = multiprocessing.Process(target=connect, args=(host,
-                                                             username_auditor,
-                                                             passw))
-        jobs.append(proc)
+        proc = threading.Thread(target=connect, args=(host,
+                                                      username_auditor,
+                                                      passw))
+        proc.daemon = True
         proc.start()
 
 if __name__ == '__main__':
