@@ -231,7 +231,6 @@ def connect(hostname, username_auditor, passw):
 
 def main():
     ''' Main loop '''
-
     while True:
         host = raw_input('Hostname:')
         username_auditor = raw_input('Username:')
