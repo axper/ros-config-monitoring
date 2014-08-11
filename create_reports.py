@@ -103,7 +103,8 @@ def view_file(filename):
 
 def create_report(user, realname):
     ''' Reads user's diff file and generates PDF report and opens the file '''
-    print('Generating report for "' + user, '" (' + realname + '):')
+    print('Generating report for "' + user +
+          '" (' + realname.encode('utf-8') + '):')
 
     filename_user_diff = user + '_diff.txt'
 
@@ -118,7 +119,7 @@ def create_report(user, realname):
 
     # Write users's real name into 'nameit.txt' (for LaTeX)
     with open('nameit.txt', 'w') as nameit:
-        nameit.write(realname)
+        nameit.write(realname.encode('utf-8'))
 
     compile_latex('report.tex')
 
@@ -135,7 +136,7 @@ def main():
     users = get_users_from_file('users.xml')
 
     for user in users.keys():
-        create_report(user, users[user].decode())
+        create_report(user, users[user].decode('utf-8'))
 
 
 if __name__ == '__main__':
