@@ -149,7 +149,7 @@ class Config(object):
             file_diff.close()
             return
 
-        
+
         diff_result = self.hostname + '  ' + log_line + ':\n' + diff_result
 
         with open(self.username_changer + '_diff.txt', 'a+') as file_diff:
@@ -180,6 +180,9 @@ class Watch(object):
         self.hostname = hostname
         self.username_auditor = username_auditor
         self.passw = passw
+
+        # Initialized in connect()
+        self.client = None
 
 
     def log_line_processor(self, log_line_raw):
