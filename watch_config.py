@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 # -*- coding: utf-8
 
 '''
@@ -31,6 +31,7 @@ import time
 import difflib
 import getpass
 import threading
+import sys
 
 
 def create_backup(filename):
@@ -119,41 +120,50 @@ class Config(object):
         return old_config
 
 
-    def append_diff(self, old_config, new_config):
+    def append_diff(self, old_config, new_config, log_line):
         ''' Writes (appends) the difference between old and new
             configs in user's diff file
         '''
         old_splitlines = old_config.splitlines()
         new_splitlines = new_config.splitlines()
 
-        diff_result = difflib.ndiff(old_splitlines[2:], new_splitlines[2:])
+        filename_diff = self.username_changer + '_diff.txt'
+        file_diff = open(filename_diff, 'a+')
 
-        diff_filtered = ''
+        diff_mod_time = time.ctime(os.path.getmtime(filename_diff))
 
-        for diffline in diff_result:
-            if diffline[:2] in ['+ ', '- ']:
-                diff_filtered += diffline + '\n'
+        diff_generator = difflib.unified_diff(old_splitlines[1:],
+                                              new_splitlines[1:],
+                                              fromfile='Prev Mod Time:',
+                                              tofile='Current Time:',
+                                              fromfiledate=diff_mod_time,
+                                              tofiledate=time.ctime(),
+                                              lineterm='')
 
-        if len(diff_filtered) > 0:
-            filename_diff = self.username_changer + '_diff.txt'
-            file_diff = open(filename_diff, 'a+')
+        diff_result = ''
+        for line in diff_generator:
+            diff_result += line + '\n'
 
-            header_line = self.hostname + ' ' + new_splitlines[0]
-            print(header_line)
-            print(header_line, file=file_diff)
-
-            print(diff_filtered)
-            print(diff_filtered, file=file_diff)
-
+        if not diff_result:
             file_diff.close()
+            return
+
+        
+        diff_result = self.hostname + '  ' + log_line + ':\n' + diff_result
+
+        with open(self.username_changer + '_diff.txt', 'a+') as file_diff:
+            print(diff_result)
+            print(diff_result, file=file_diff)
+
+        file_diff.close()
 
 
-    def write_config_change(self):
+    def write_config_change(self, log_line):
         ''' Call this '''
         new_config = self.get_new_config()
         old_config = self.get_old_config(new_config)
 
-        self.append_diff(old_config, new_config)
+        self.append_diff(old_config, new_config, log_line)
 
         create_backup(self.filename_config)
 
@@ -179,12 +189,10 @@ class Watch(object):
                 'moved by' in log_line or
                 'added by' in log_line or
                 'removed by' in log_line):
-            print(log_line)
             username_changer = log_line.split()[-1]
-            print('Config changed by', username_changer + ':')
 
             conf_instance = Config(self.client, username_changer)
-            conf_instance.write_config_change()
+            conf_instance.write_config_change(log_line)
 
 
     def watch_log(self):
@@ -193,8 +201,7 @@ class Watch(object):
         transport = self.client.get_transport()
 
         # Just in case check if there were changes while program was down
-        conf_instance = Config(self.client, 'UNKNOWN')
-        conf_instance.write_config_change()
+        self.log_line_processor('config changed by UNKNOWN')
 
         client = transport.open_session()
         client.exec_command('/log print follow-only')
@@ -211,7 +218,12 @@ class Watch(object):
 
             time.sleep(0.05)
 
-        print('Exit status:', client.recv_exit_status())
+        print('='*20,
+              'Router Disconnected:',
+              self.hostname,
+              'status:',
+              client.recv_exit_status(),
+              '='*20)
 
         transport.close()
         client.close()
@@ -221,7 +233,11 @@ def connect(hostname, username_auditor, passw):
     ''' Connect to router with given parameters and call watcher '''
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(hostname, username=username_auditor, password=passw)
+    try:
+        client.connect(hostname, username=username_auditor, password=passw)
+    except paramiko.AuthenticationException:
+        print('<Auth failed for', username_auditor + '@' + hostname + '>')
+        return
 
     watch = Watch(hostname, client)
     watch.watch_log()
