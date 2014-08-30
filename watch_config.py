@@ -32,6 +32,7 @@ import difflib
 import getpass
 import threading
 import sys
+import socket
 
 
 def create_backup(filename):
@@ -175,9 +176,10 @@ class Config(object):
 class Watch(object):
     ''' Functions for watching router logs
     '''
-    def __init__(self, hostname, client):
+    def __init__(self, hostname, username_auditor, passw):
         self.hostname = hostname
-        self.client = client
+        self.username_auditor = username_auditor
+        self.passw = passw
 
 
     def log_line_processor(self, log_line_raw):
@@ -218,31 +220,54 @@ class Watch(object):
 
             time.sleep(0.05)
 
-        print('='*20,
-              'Router Disconnected:',
-              self.hostname,
-              'status:',
-              client.recv_exit_status(),
-              '='*20)
+        disconnect_log = '='*10 + \
+                         ' Router Disconnected: ' + self.hostname + \
+                         ' at ' + time.ctime() + \
+                         ' status: ' + str(client.recv_exit_status()) + ' ' + \
+                         '='*10 + '\n'
+
+        with open('UNKNOWN' + '_diff.txt', 'a+') as file_diff:
+            print(disconnect_log)
+            print(disconnect_log, file=file_diff)
 
         transport.close()
         client.close()
 
 
-def connect(hostname, username_auditor, passw):
-    ''' Connect to router with given parameters and call watcher '''
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    try:
-        client.connect(hostname, username=username_auditor, password=passw)
-    except paramiko.AuthenticationException:
-        print('<Auth failed for', username_auditor + '@' + hostname + '>')
-        return
+    def connect(self):
+        ''' Connect to router with given parameters and call watcher '''
+        self.client = paramiko.SSHClient()
+        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            self.client.connect(self.hostname,
+                                username=self.username_auditor,
+                                password=self.passw)
+        except paramiko.AuthenticationException:
+            print('<Auth failed for', self.username_auditor + '@' +
+                  self.hostname + '>')
+            return
 
-    watch = Watch(hostname, client)
-    watch.watch_log()
+        connect_log = '='*10 + \
+                      ' Router Connected: ' + self.hostname + \
+                      ' at ' + time.ctime() + ' ' + \
+                      '='*10 + '\n'
 
-    client.close()
+        with open('UNKNOWN' + '_diff.txt', 'a+') as file_diff:
+            print(connect_log)
+            print(connect_log, file=file_diff)
+
+        self.watch_log()
+
+        self.client.close()
+
+
+    def watch(self):
+        ''' Call this '''
+        while True:
+            try:
+                self.connect()
+            except socket.error:
+                time.sleep(0.3)
 
 
 def main():
@@ -252,12 +277,16 @@ def main():
         username_auditor = raw_input('Username:')
         passw = getpass.getpass('Password:')
 
-        proc = threading.Thread(target=connect, args=(host,
-                                                      username_auditor,
-                                                      passw))
+        watch = Watch(host, username_auditor, passw)
+
+        proc = threading.Thread(target=watch.watch)
         proc.daemon = True
         proc.start()
 
+
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(0)
 
