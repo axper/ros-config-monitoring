@@ -32,12 +32,34 @@ import threading
 import sys
 import socket
 import queue
+import subprocess
+import xml.etree.ElementTree
 
 import paramiko
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 
 log_file = open('watch_config_log.txt', 'w')
+
+class LatexNotFound(Exception):
+    pass
+
+
+class BackupCreator(object):
+    @staticmethod
+    def create_backup(filename):
+        ''' Copies filename into backup directory and returns full path of it
+        '''
+        backup_dir = 'backups'
+
+        if not os.path.exists(backup_dir):
+            os.makedirs(backup_dir)
+
+        backup_filename = time.strftime('%d.%m.%Y_%H.%M.%S') + '__' + filename
+        backup_full_path = os.path.join(backup_dir, backup_filename)
+        shutil.copy2(filename, backup_full_path)
+
+        return backup_full_path
 
 
 class WriteStream(object):
@@ -170,20 +192,6 @@ class Config(object):
 
         file_diff.close()
 
-    def create_backup(self, filename):
-        ''' Copies filename into backup directory and returns full path of it
-        '''
-        backup_dir = 'backups'
-
-        if not os.path.exists(backup_dir):
-            os.makedirs(backup_dir)
-
-        backup_filename = time.strftime('%d.%m.%Y_%H.%M.%S') + '__' + filename
-        backup_full_path = os.path.join(backup_dir, backup_filename)
-        shutil.copy2(filename, backup_full_path)
-
-        return backup_full_path
-
     def write_config_change(self, log_line):
         ''' Call this '''
         new_config = self.get_new_config()
@@ -191,7 +199,7 @@ class Config(object):
 
         self.append_diff(old_config, new_config, log_line)
 
-        self.create_backup(self.filename_config)
+        BackupCreator.create_backup(self.filename_config)
 
         # Update config file with new config
         with open(self.filename_config, 'w') as file_config:
@@ -293,6 +301,125 @@ class Watch(object):
             time.sleep(0.3)
 
 
+class ReportCreator(object):
+    def move(self, source, destination):
+        ''' Moves/Renames file source to destination '''
+        try:
+            os.remove(destination)
+        except OSError:
+            pass
+
+        shutil.copyfile(source, destination)
+
+        os.remove(source)
+
+    def get_users_from_file(self, filename):
+        ''' Reads and returns user info dictionary from file filename '''
+        users_dict = {}
+
+        tree = xml.etree.ElementTree.parse(filename)
+
+        root = tree.getroot()
+
+        for user_info in root:
+            username = user_info.get('username')
+            realname = user_info.find('realname').text.encode('utf-8')
+
+            users_dict[username] = realname
+
+        return users_dict
+
+    def compile_latex(self, filename_tex):
+        ''' Compiles the filename_tex to PDF using xelatex
+            LaTeX distribution is first searched in $PATH.
+            If not found, it looks for a local miktex_portable directory.
+        '''
+        try:
+            output = subprocess.check_output(['xelatex',
+                                              '-halt-on-error',
+                                              filename_tex])
+            print(output.decode('utf-8'))
+        except FileNotFoundError:
+            print('Did not find xelatex in $PATH, looking for '
+                  '"miktex_porable" directory')
+            try:
+                output = subprocess.check_output(['miktex_portable\\miktex\\bin\\xelatex.exe',
+                                                  '-halt-on-error',
+                                                  filename_tex])
+                print(output.decode('utf-8'))
+            except FileNotFoundError:
+                print('Could not find local miktex portable directory either. '
+                      'You 2 options:\n'
+                      '  1. Install Tex Live LaTeX package for your distro '
+                      '(or Install MikTex if you are using Windows)\n'
+                      '  2. If you are using windows, download the miktex '
+                      'portable installer and extract the files into a '
+                      'directory called "miktext_portable". This program '
+                      'will try to use the '
+                      '"miktex_portable\\miktex\\bin\\xelatex.exe" file '
+                      'for PDF generation.'
+                      )
+                raise LatexNotFound()
+
+    def view_file(self, filename):
+        ''' Opens a file in OS's default file viewer '''
+        if sys.platform.startswith('linux'):
+            subprocess.call(['xdg-open', filename])
+        else:
+            os.startfile(filename)
+
+    def create_report_for_user(self, user, realname):
+        ''' Reads user's diff file and generates PDF report and opens the file '''
+        print('Generating report for "' + user +
+              '" (' + realname + '):')
+
+        filename_user_diff = user + '_diff.txt'
+
+        if not os.path.exists(filename_user_diff):
+            print('No diff file found for ' + user + ', skipping...')
+            return
+
+
+        BackupCreator.create_backup(filename_user_diff)
+        self.move(filename_user_diff, 'diff.txt')
+
+
+        # Write users's real name into 'nameit.txt' (for LaTeX)
+        with open('nameit.txt', 'w') as nameit:
+            nameit.write(realname)
+
+        self.compile_latex('report.tex')
+
+        filename_user_report = user + '_report.pdf'
+        self.move('report.pdf', filename_user_report)
+        file_report_backup = BackupCreator.create_backup(filename_user_report)
+
+
+        self.view_file(file_report_backup)
+
+    def create_reports(self):
+        ''' Call this '''
+        try:
+            users = self.get_users_from_file('users.xml')
+        except FileNotFoundError:
+            print('Could not read the file users.xml. Please create it and '
+                  'specify the router user account names and their '
+                  'real names. If the user is not specified, a report '
+                  'will not be generated for him! '
+                  'There should have been an exmaple file which you have '
+                  'probably deleted.')
+            return
+
+        try:
+            for user in users.keys():
+                self.create_report_for_user(user, users[user].decode('utf-8'))
+        except LatexNotFound:
+            print('Aborting PDF generation as no LaTeX distribution was '
+                  'found.\n')
+        except subprocess.CalledProcessError:
+            print('xelatex command failed.  Probably report.tex was not found.')
+
+
 class Ui_MainWindow(QtWidgets.QWidget):
     window_visible = True
 
@@ -307,6 +434,7 @@ class Ui_MainWindow(QtWidgets.QWidget):
     def setupUi(self, MainWindow):
         MainWindow.setObjectName('MainWindow')
         MainWindow.resize(700, 450)
+        MainWindow.setWindowTitle('MikroTik RouterOS configuration monitoring')
         self.centralWidget = QtWidgets.QWidget(MainWindow)
         self.centralWidget.setObjectName('centralWidget')
         self.gridLayout_2 = QtWidgets.QGridLayout(self.centralWidget)
@@ -316,6 +444,7 @@ class Ui_MainWindow(QtWidgets.QWidget):
         font.setFamily('Monospace')
         font.setPointSize(8)
         font.setStyleStrategy(QtGui.QFont.PreferAntialias)
+        font.setStyleHint(QtGui.QFont.TypeWriter)
         self.plainTextEdit.setFont(font)
         self.plainTextEdit.setReadOnly(True)
         self.plainTextEdit.setObjectName('plainTextEdit')
@@ -351,6 +480,9 @@ class Ui_MainWindow(QtWidgets.QWidget):
         self.label_password.setObjectName('label_password')
         self.gridLayout.addWidget(self.label_password, 2, 0, 1, 1)
         self.gridLayout_2.addLayout(self.gridLayout, 0, 0, 1, 1)
+        self.pushButton_genreport = QtWidgets.QPushButton(self.centralWidget)
+        self.pushButton_genreport.setObjectName('pushButton_genreport')
+        self.gridLayout_2.addWidget(self.pushButton_genreport, 2, 0, 1, 1)
         MainWindow.setCentralWidget(self.centralWidget)
         self.menuBar = QtWidgets.QMenuBar(MainWindow)
         self.menuBar.setGeometry(QtCore.QRect(0, 0, 483, 19))
@@ -384,6 +516,12 @@ class Ui_MainWindow(QtWidgets.QWidget):
 
         self.statusBar.clearMessage()
 
+    def on_pushButton_genreport_clicked(self):
+        report_creator = ReportCreator()
+        
+        proc_genreports = threading.Thread(target=report_creator.create_reports)
+        proc_genreports.start()
+
     def tray_icon_clicked(self):
         if self.window_visible:
             MainWindow.hide()
@@ -399,13 +537,14 @@ class Ui_MainWindow(QtWidgets.QWidget):
         self.label_connect.setText(_translate('MainWindow', 'Connect:'))
         self.label_login.setText(_translate('MainWindow', 'Login:'))
         self.label_password.setText(_translate('MainWindow', 'Password:'))
-
-        self.pushButton_connect.clicked.connect(self.on_pushButton_connect_clicked)
+        self.pushButton_genreport.setText(_translate('MainWindow', 'Generate PDF Reports'))
 
         self.system_tray = QtWidgets.QSystemTrayIcon(QtGui.QIcon('router_icon_noalpha.png'), ui)
         self.system_tray.setToolTip('RouterOS Config Monitoring')
         self.system_tray.show()
 
+        self.pushButton_connect.clicked.connect(self.on_pushButton_connect_clicked)
+        self.pushButton_genreport.clicked.connect(self.on_pushButton_genreport_clicked)
         self.system_tray.activated.connect(self.tray_icon_clicked)
 
     from PyQt5.QtCore import pyqtSlot
