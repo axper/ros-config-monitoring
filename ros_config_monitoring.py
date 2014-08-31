@@ -39,8 +39,6 @@ import paramiko
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 
-log_file = open('watch_config_log.txt', 'w')
-
 class LatexNotFound(Exception):
     pass
 
@@ -66,10 +64,14 @@ class WriteStream(object):
     ''' stdout redirection to log window '''
     def __init__(self, queue):
         self.queue = queue
+        self.log_file = open('ros_config_monitoring_log.txt', 'w')
+
+    def __exit__(self, type, value, traceback):
+        self.log_file.close()
 
     def write(self, text):
         self.queue.put(text)
-        log_file.write(text)
+        self.log_file.write(text)
 
     def flush(self):
         pass
