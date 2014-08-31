@@ -144,7 +144,7 @@ class Config(object):
             old_config = file_config.read()
         except IOError:
             print('Note: Old config file does not exist. '
-                  'Creating new config file and writing new config')
+                  'Creating new config file and writing new config.\n')
 
             file_config = open(self.filename_config, 'w')
             file_config.write(new_config)
@@ -527,6 +527,7 @@ class Ui_MainWindow(QtWidgets.QWidget):
             MainWindow.hide()
         else:
             MainWindow.show()
+            MainWindow.activateWindow()
 
         self.window_visible = not self.window_visible
 
