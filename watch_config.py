@@ -24,7 +24,6 @@
 '''
 
 from __future__ import print_function
-import paramiko
 import os
 import shutil
 import time
@@ -33,21 +32,38 @@ import getpass
 import threading
 import sys
 import socket
+import Queue
+
+import paramiko
+from PyQt5 import QtCore, QtGui, QtWidgets
 
 
-def create_backup(filename):
-    ''' Copies filename into backup directory and returns full path of it
-    '''
-    backup_dir = 'backups'
+log_file = open('watch_config_log.txt', 'w')
 
-    if not os.path.exists(backup_dir):
-        os.makedirs(backup_dir)
 
-    backup_filename = time.strftime('%d.%m.%Y_%H.%M.%S') + '__' + filename
-    backup_full_path = os.path.join(backup_dir, backup_filename)
-    shutil.copy2(filename, backup_full_path)
+class WriteStream(object):
+    ''' stdout redirection to log window '''
+    def __init__(self, queue):
+        self.queue = queue
 
-    return backup_full_path
+    def write(self, text):
+        self.queue.put(text)
+        log_file.write(text)
+
+
+class MyReceiver(QtCore.QObject):
+    mysignal = QtCore.pyqtSignal(str)
+
+    def __init__(self,queue,*args,**kwargs):
+        QtCore.QObject.__init__(self,*args,**kwargs)
+        self.queue = queue
+
+    from PyQt5.QtCore import pyqtSlot
+    @pyqtSlot()
+    def run(self):
+        while True:
+            text = self.queue.get()
+            self.mysignal.emit(text)
 
 
 class Config(object):
@@ -62,7 +78,6 @@ class Config(object):
         self.hostname = temp_transport.getpeername()[0]
 
         self.filename_config = self.hostname + '_config.txt'
-
 
     def get_new_config(self):
         ''' Fetch and return current configuration from the router
@@ -97,7 +112,6 @@ class Config(object):
 
         return new_config
 
-
     def get_old_config(self, new_config):
         ''' If config file exists, reads and returns it's contents
             If config file doesn't exist, write new config and return it
@@ -119,7 +133,6 @@ class Config(object):
         file_config.close()
 
         return old_config
-
 
     def append_diff(self, old_config, new_config, log_line):
         ''' Writes (appends) the difference between old and new
@@ -158,6 +171,19 @@ class Config(object):
 
         file_diff.close()
 
+    def create_backup(self, filename):
+        ''' Copies filename into backup directory and returns full path of it
+        '''
+        backup_dir = 'backups'
+
+        if not os.path.exists(backup_dir):
+            os.makedirs(backup_dir)
+
+        backup_filename = time.strftime('%d.%m.%Y_%H.%M.%S') + '__' + filename
+        backup_full_path = os.path.join(backup_dir, backup_filename)
+        shutil.copy2(filename, backup_full_path)
+
+        return backup_full_path
 
     def write_config_change(self, log_line):
         ''' Call this '''
@@ -166,7 +192,7 @@ class Config(object):
 
         self.append_diff(old_config, new_config, log_line)
 
-        create_backup(self.filename_config)
+        self.create_backup(self.filename_config)
 
         # Update config file with new config
         with open(self.filename_config, 'w') as file_config:
@@ -184,7 +210,6 @@ class Watch(object):
         # Initialized in connect()
         self.client = None
 
-
     def log_line_processor(self, log_line_raw):
         ''' Searches for specific words indicating a configuration change.
         '''
@@ -198,7 +223,6 @@ class Watch(object):
 
             conf_instance = Config(self.client, username_changer)
             conf_instance.write_config_change(log_line)
-
 
     def watch_log(self):
         ''' Opens new channel and starts listening for new log lines
@@ -223,19 +247,8 @@ class Watch(object):
 
             time.sleep(0.05)
 
-        disconnect_log = '='*10 + \
-                         ' Router Disconnected: ' + self.hostname + \
-                         ' at ' + time.ctime() + \
-                         ' status: ' + str(client.recv_exit_status()) + ' ' + \
-                         '='*10 + '\n'
-
-        with open('UNKNOWN' + '_diff.txt', 'a+') as file_diff:
-            print(disconnect_log)
-            print(disconnect_log, file=file_diff)
-
         transport.close()
         client.close()
-
 
     def connect(self):
         ''' Connect to router with given parameters and call watcher '''
@@ -246,14 +259,15 @@ class Watch(object):
                                 username=self.username_auditor,
                                 password=self.passw)
         except paramiko.AuthenticationException:
-            print('<Auth failed for', self.username_auditor + '@' +
-                  self.hostname + '>')
-            return
+            print('Auth failed for', self.username_auditor + '@' +
+                  self.hostname + '\n')
+            return 1
+        except socket.error:
+            print('Could not connect to', self.hostname + '\n')
+            return 2
 
-        connect_log = '='*10 + \
-                      ' Router Connected: ' + self.hostname + \
-                      ' at ' + time.ctime() + ' ' + \
-                      '='*10 + '\n'
+        connect_log = 'Connected to ' + self.hostname + \
+                      ' at ' + time.ctime() + '\n'
 
         with open('UNKNOWN' + '_diff.txt', 'a+') as file_diff:
             print(connect_log)
@@ -263,22 +277,107 @@ class Watch(object):
 
         self.client.close()
 
+        return 0
 
     def watch(self):
-        ''' Call this '''
+        ''' Call this as new thread '''
         while True:
-            try:
-                self.connect()
-            except socket.error:
-                time.sleep(0.3)
+            if self.connect():
+                break
+            disconnect_log = 'Disconnected ' + self.hostname + \
+                             ' at ' + time.ctime() + '\n' + \
+                             'Will keep trying to reconnect ' + \
+                             'every several seconds\n'
+
+            with open('UNKNOWN' + '_diff.txt', 'a+') as file_diff:
+                print(disconnect_log)
+                print(disconnect_log, file=file_diff)
+
+            time.sleep(0.3)
 
 
-def main():
-    ''' Main loop '''
-    while True:
-        host = raw_input('Hostname:')
-        username_auditor = raw_input('Username:')
-        passw = getpass.getpass('Password:')
+class Ui_MainWindow(QtWidgets.QWidget):
+    window_visible = True
+
+    def valid_ip_address(self, ip_address):
+        try:
+            socket.inet_aton(ip_address)
+        except socket.error:
+            return False
+
+        return True
+
+    def setupUi(self, MainWindow):
+        MainWindow.setObjectName('MainWindow')
+        MainWindow.resize(700, 450)
+        self.centralWidget = QtWidgets.QWidget(MainWindow)
+        self.centralWidget.setObjectName('centralWidget')
+        self.gridLayout_2 = QtWidgets.QGridLayout(self.centralWidget)
+        self.gridLayout_2.setObjectName('gridLayout_2')
+        self.plainTextEdit = QtWidgets.QPlainTextEdit(self.centralWidget)
+        font = QtGui.QFont()
+        font.setFamily('Monospace')
+        font.setPointSize(8)
+        font.setStyleStrategy(QtGui.QFont.PreferAntialias)
+        self.plainTextEdit.setFont(font)
+        self.plainTextEdit.setReadOnly(True)
+        self.plainTextEdit.setObjectName('plainTextEdit')
+        self.gridLayout_2.addWidget(self.plainTextEdit, 1, 0, 1, 1)
+        self.gridLayout = QtWidgets.QGridLayout()
+        self.gridLayout.setObjectName('gridLayout')
+        self.lineEdit_hostname = QtWidgets.QLineEdit(self.centralWidget)
+        self.lineEdit_hostname.setFocus()
+        self.lineEdit_hostname.setObjectName('lineEdit_hostname')
+        self.gridLayout.addWidget(self.lineEdit_hostname, 0, 1, 1, 1)
+        self.lineEdit_login = QtWidgets.QLineEdit(self.centralWidget)
+        self.lineEdit_login.setObjectName('lineEdit_login')
+        self.gridLayout.addWidget(self.lineEdit_login, 1, 1, 1, 1)
+        self.lineEdit_password = QtWidgets.QLineEdit(self.centralWidget)
+        self.lineEdit_password.setEchoMode(QtWidgets.QLineEdit.EchoMode(QtWidgets.QLineEdit.Password))
+        self.lineEdit_password.setObjectName('lineEdit_password')
+        self.gridLayout.addWidget(self.lineEdit_password, 2, 1, 1, 1)
+        self.pushButton_connect = QtWidgets.QPushButton(self.centralWidget)
+        self.pushButton_connect.setAutoDefault(True)
+        self.pushButton_connect.setDefault(True)
+        self.pushButton_connect.setObjectName('pushButton_connect')
+        self.gridLayout.addWidget(self.pushButton_connect, 0, 2, 1, 1)
+        self.label_connect = QtWidgets.QLabel(self.centralWidget)
+        self.label_connect.setAlignment(QtCore.Qt.AlignRight|QtCore.Qt.AlignTrailing|QtCore.Qt.AlignVCenter)
+        self.label_connect.setObjectName('label_connect')
+        self.gridLayout.addWidget(self.label_connect, 0, 0, 1, 1)
+        self.label_login = QtWidgets.QLabel(self.centralWidget)
+        self.label_login.setAlignment(QtCore.Qt.AlignRight|QtCore.Qt.AlignTrailing|QtCore.Qt.AlignVCenter)
+        self.label_login.setObjectName('label_login')
+        self.gridLayout.addWidget(self.label_login, 1, 0, 1, 1)
+        self.label_password = QtWidgets.QLabel(self.centralWidget)
+        self.label_password.setAlignment(QtCore.Qt.AlignRight|QtCore.Qt.AlignTrailing|QtCore.Qt.AlignVCenter)
+        self.label_password.setObjectName('label_password')
+        self.gridLayout.addWidget(self.label_password, 2, 0, 1, 1)
+        self.gridLayout_2.addLayout(self.gridLayout, 0, 0, 1, 1)
+        MainWindow.setCentralWidget(self.centralWidget)
+        self.menuBar = QtWidgets.QMenuBar(MainWindow)
+        self.menuBar.setGeometry(QtCore.QRect(0, 0, 483, 19))
+        self.menuBar.setObjectName('menuBar')
+        MainWindow.setMenuBar(self.menuBar)
+        self.statusBar = QtWidgets.QStatusBar(MainWindow)
+        self.statusBar.setObjectName('statusBar')
+        MainWindow.setStatusBar(self.statusBar)
+
+        self.retranslateUi(MainWindow)
+        QtCore.QMetaObject.connectSlotsByName(MainWindow)
+
+    def on_pushButton_connect_clicked(self):
+        host = self.lineEdit_hostname.text()
+        if not self.valid_ip_address(host):
+            self.statusBar.showMessage('Wrong IP address format')
+            return
+
+        username_auditor = self.lineEdit_login.text()
+        if not username_auditor:
+            self.statusBar.showMessage('Login is empty')
+            return
+
+        passw = self.lineEdit_password.text()
 
         watch = Watch(host, username_auditor, passw)
 
@@ -286,10 +385,73 @@ def main():
         proc.daemon = True
         proc.start()
 
+        self.statusBar.clearMessage()
+
+    def tray_icon_clicked(self):
+        if self.window_visible:
+            MainWindow.hide()
+        else:
+            MainWindow.show()
+
+        self.window_visible = not self.window_visible
+
+    def retranslateUi(self, MainWindow):
+        _translate = QtCore.QCoreApplication.translate
+        MainWindow.setWindowTitle(_translate('MainWindow', 'MainWindow'))
+        self.pushButton_connect.setText(_translate('MainWindow', 'Connect'))
+        self.label_connect.setText(_translate('MainWindow', 'Connect:'))
+        self.label_login.setText(_translate('MainWindow', 'Login:'))
+        self.label_password.setText(_translate('MainWindow', 'Password:'))
+
+        self.pushButton_connect.clicked.connect(self.on_pushButton_connect_clicked)
+
+        self.system_tray = QtWidgets.QSystemTrayIcon(QtGui.QIcon('router_icon_noalpha.png'), ui)
+        self.system_tray.setToolTip('RouterOS Config Monitoring')
+        self.system_tray.show()
+
+        self.system_tray.activated.connect(self.tray_icon_clicked)
+
+    from PyQt5.QtCore import pyqtSlot
+    @pyqtSlot(str)
+    def append_text(self, text):
+        self.plainTextEdit.moveCursor(QtGui.QTextCursor.End)
+        self.plainTextEdit.insertPlainText(text)
+
+    def closeEvent(self, event):
+        print('nope.')
+
+    '''
+    def closeEvent(self, event):
+        if self.okayToClose(): 
+            #user asked for exit
+            self.trayIcon.hide()
+            event.accept()
+        else:
+            #"minimize"
+            self.hide()
+            self.trayIcon.show() #thanks @mojo
+            event.ignore()
+    '''
+
 
 if __name__ == '__main__':
-    try:
-        main()
-    except KeyboardInterrupt:
-        sys.exit(0)
+    queue = Queue.Queue()
+    sys.stdout = WriteStream(queue)
+    sys.stderr = WriteStream(queue)
+
+    app = QtWidgets.QApplication(sys.argv)
+
+    MainWindow = QtWidgets.QMainWindow()
+    ui = Ui_MainWindow()
+    ui.setupUi(MainWindow)
+    MainWindow.show()
+
+    thread = QtCore.QThread()
+    my_receiver = MyReceiver(queue)
+    my_receiver.mysignal.connect(ui.append_text)
+    my_receiver.moveToThread(thread)
+    thread.started.connect(my_receiver.run)
+    thread.start()
+
+    sys.exit(app.exec_())
 
