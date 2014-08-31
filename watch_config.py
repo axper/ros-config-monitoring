@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python
 # -*- coding: utf-8
 
 '''
@@ -23,7 +23,6 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
 
-from __future__ import print_function
 import os
 import shutil
 import time
@@ -32,7 +31,7 @@ import getpass
 import threading
 import sys
 import socket
-import Queue
+import queue
 
 import paramiko
 from PyQt5 import QtCore, QtGui, QtWidgets
@@ -206,14 +205,12 @@ class Watch(object):
         self.hostname = hostname
         self.username_auditor = username_auditor
         self.passw = passw
-
-        # Initialized in connect()
         self.client = None
 
     def log_line_processor(self, log_line_raw):
         ''' Searches for specific words indicating a configuration change.
         '''
-        log_line = log_line_raw.decode('ascii').strip()
+        log_line = log_line_raw.decode('utf-8').strip()
 
         if ('changed by' in log_line or
                 'moved by' in log_line or
@@ -230,7 +227,7 @@ class Watch(object):
         transport = self.client.get_transport()
 
         # Just in case check if there were changes while program was down
-        self.log_line_processor('config changed by UNKNOWN')
+        self.log_line_processor(b'config changed by UNKNOWN')
 
         client = transport.open_session()
         client.exec_command('/log print follow-only')
@@ -435,7 +432,7 @@ class Ui_MainWindow(QtWidgets.QWidget):
 
 
 if __name__ == '__main__':
-    queue = Queue.Queue()
+    queue = queue.Queue()
     sys.stdout = WriteStream(queue)
     sys.stderr = WriteStream(queue)
 
