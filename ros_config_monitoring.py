@@ -71,6 +71,9 @@ class WriteStream(object):
         self.queue.put(text)
         log_file.write(text)
 
+    def flush(self):
+        pass
+
 
 class MyReceiver(QtCore.QObject):
     mysignal = QtCore.pyqtSignal(str)
@@ -554,7 +557,12 @@ class Ui_MainWindow(QtWidgets.QWidget):
         self.plainTextEdit.moveCursor(QtGui.QTextCursor.End)
         self.plainTextEdit.insertPlainText(text)
 
+    def do_something():
+        with open('xxxxxxxxxxx', 'w') as f:
+            pass
+
     def closeEvent(self, event):
+        self.do_something()
         print('nope.')
 
     '''
@@ -571,6 +579,21 @@ class Ui_MainWindow(QtWidgets.QWidget):
     '''
 
 
+class MainWindowClass(QtWidgets.QMainWindow):
+    def __init__(self):
+        QtWidgets.QMainWindow.__init__(self)
+
+    def closeEvent(self, event):
+        print('event')
+        reply = QtGui.QMessageBox.question(self, 'Message',
+            'Are you sure to quit?', QtGui.QMessageBox.Yes, QtGui.QMessageBox.No)
+
+        if reply == QtGui.QMessageBox.Yes:
+            event.accept()
+        else:
+            event.ignore()
+
+
 if __name__ == '__main__':
     queue = queue.Queue()
     sys.stdout = WriteStream(queue)
@@ -578,7 +601,7 @@ if __name__ == '__main__':
 
     app = QtWidgets.QApplication(sys.argv)
 
-    MainWindow = QtWidgets.QMainWindow()
+    MainWindow = MainWindowClass()
     ui = Ui_MainWindow()
     ui.setupUi(MainWindow)
     MainWindow.show()
