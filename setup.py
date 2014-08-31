@@ -2,10 +2,9 @@ from distutils.core import setup
 import py2exe
 
 setup(
-    console=
+    window=
     [
-        'create_reports.py',
-        'watch_config.py'
+        'ros_config_monitoring.py',
     ]
 )
 
