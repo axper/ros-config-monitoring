@@ -1,4 +1,5 @@
-python C:\Python34\Scripts\cxfreeze --base-name=Win32GUI ros_config_monitoring.py
+@echo off
+python C:\Python34\Scripts\cxfreeze --base-name=Win32GUI ros_config_monitoring.py --target-dir "RouterOS Configuration Monitoring"
 copy router_icon.png dist
 copy users.xml dist
 copy report.tex dist

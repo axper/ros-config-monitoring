@@ -2,7 +2,7 @@ from distutils.core import setup
 import py2exe
 
 setup(
-    window=
+    windows=
     [
         'ros_config_monitoring.py',
     ]
