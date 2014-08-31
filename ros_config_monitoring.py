@@ -437,7 +437,6 @@ class Ui_MainWindow(QtWidgets.QWidget):
     def setupUi(self, MainWindow):
         MainWindow.setObjectName('MainWindow')
         MainWindow.resize(700, 450)
-        MainWindow.setWindowTitle('MikroTik RouterOS configuration monitoring')
         self.centralWidget = QtWidgets.QWidget(MainWindow)
         self.centralWidget.setObjectName('centralWidget')
         self.gridLayout_2 = QtWidgets.QGridLayout(self.centralWidget)
