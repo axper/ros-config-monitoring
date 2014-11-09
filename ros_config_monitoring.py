@@ -27,8 +27,34 @@ import os
 import time
 import difflib
 import socket
+import logging
+import logging.handlers
+import sys
+import configparser
 
 import paramiko
+
+
+config = configparser.ConfigParser()
+config.read('config.txt')
+
+
+def initialize_logging():
+    global logger
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.DEBUG)
+
+    handler_stdout = logging.StreamHandler(sys.stdout)
+    handler_stdout.setLevel(logging.DEBUG)
+    handler_log_file = logging.FileHandler(config['DEFAULT']['LOG_FILE_NAME'])
+    handler_log_file.setLevel(logging.DEBUG)
+    handler_email = logging.handlers.SMTPHandler(config['DEFAULT']['MAIL_SERVER'],
+                                                 config['DEFAULT']['MAIL_FROM'],
+                                                 config['DEFAULT']['MAIL_TO'],
+                                                 config['DEFAULT']['MAIL_SUBJECT'])
+
+    logger.addHandler(handler_stdout)
+    logger.addHandler(handler_log_file)
 
 
 def create_backup(filename):
@@ -42,11 +68,12 @@ def create_backup(filename):
     if not os.path.exists(backup_dir):
         os.makedirs(backup_dir)
 
-    backup_filename = time.strftime('%d.%m.%Y_%H.%M.%S') + '__' + filename
+    backup_filename = time.strftime('%Y.%m.%d_%H.%M.%S') + '__' + filename
     backup_full_path = os.path.join(backup_dir, backup_filename)
     shutil.copy2(filename, backup_full_path)
 
     return backup_full_path
+
 
 class Config(object):
     ''' Functions for receiving and diff'ing configs
@@ -97,14 +124,12 @@ class Config(object):
         ''' If config file exists, reads and returns it's contents
             If config file doesn't exist, write new config and return it
         '''
-
         try:
             file_config = open(self.filename_config, 'r')
 
             old_config = file_config.read()
         except IOError:
-            print('Note: Old config file does not exist. '
-                  'Creating new config file and writing new config.\n')
+            logger.warning('Creating new config file %s', self.filename_config)
 
             file_config = open(self.filename_config, 'w')
             file_config.write(new_config)
@@ -115,59 +140,52 @@ class Config(object):
 
         return old_config
 
-    def append_diff(self, old_config, new_config, log_line):
-        ''' Writes (appends) the difference between old and new
-            configs in user's diff file
-        '''
+    def get_diff_result(self, old_config, new_config):
         old_splitlines = old_config.splitlines()
         new_splitlines = new_config.splitlines()
 
-        filename_diff = self.username_changer + '_diff.txt'
-        file_diff = open(filename_diff, 'a+')
-
-        diff_mod_time = time.ctime(os.path.getmtime(filename_diff))
-
         diff_generator = difflib.unified_diff(old_splitlines[1:],
                                               new_splitlines[1:],
-                                              fromfile='Prev Mod Time:',
-                                              tofile='Current Time:',
-                                              fromfiledate=diff_mod_time,
-                                              tofiledate=time.ctime(),
+                                              n=0,
                                               lineterm='')
 
-        diff_result = ''
-        for line in diff_generator:
-            diff_result += line + '\n'
+        diff_result = '\n'.join(list(diff_generator)[2:])
 
-        if not diff_result:
-            file_diff.close()
-            return
+        return diff_result
 
+    def handle_config_change(self, log_line):
+        ''' Call this.
 
-        diff_result = self.hostname + '  ' + log_line + ':\n' + diff_result
-
-        with open(self.username_changer + '_diff.txt', 'a+') as file_diff:
-            print(diff_result)
-            print(diff_result, file=file_diff)
-
-        file_diff.close()
-
-    def write_config_change(self, log_line):
-        ''' Call this '''
+            Calculates difference between new_config and old_config.
+            Backs up the old config file.
+            Writes new configuration in config file.
+        '''
         new_config = self.get_new_config()
         old_config = self.get_old_config(new_config)
 
-        self.append_diff(old_config, new_config, log_line)
+
+        #self.hostname
+        date_and_time = time.ctime()
+        #log_line
+        diff_result = self.get_diff_result(old_config, new_config)
+
+        if not diff_result:
+            logger.info('No config was changed at %s', self.hostname)
+            return
+
+        full_diff_text = self.hostname + ' ' + date_and_time + '\n' + \
+                         log_line + '\n' + \
+                         diff_result
+
+        logger.info(full_diff_text)
 
         create_backup(self.filename_config)
-
-        # Update config file with new config
         with open(self.filename_config, 'w') as file_config:
             file_config.write(new_config)
 
 
 class Watch(object):
-    ''' Functions for watching router logs
+    ''' Router log watcher
     '''
     def __init__(self, hostname, passw, username_auditor):
         self.hostname = hostname
@@ -187,7 +205,7 @@ class Watch(object):
             username_changer = log_line.split()[-1]
 
             conf_instance = Config(self.client, username_changer)
-            conf_instance.write_config_change(log_line)
+            conf_instance.handle_config_change(log_line)
 
     def watch_log(self):
         ''' Opens new channel and starts listening for new log lines
@@ -195,28 +213,36 @@ class Watch(object):
         transport = self.client.get_transport()
 
         # Just in case check if there were changes while program was down
-        self.log_line_processor(b'config changed by UNKNOWN')
+        self.log_line_processor(b'WARNING: While program down the config was '
+                                b'changed by an unknown user')
 
         client = transport.open_session()
         client.exec_command('/log print follow-only')
 
         while not client.exit_status_ready():
             if client.recv_ready():
-                recovered = client.recv(500)
+                recovered = client.recv(float(config['DEFAULT']['LOG_LINE_MAX']))
 
                 for line in recovered.splitlines():
                     self.log_line_processor(line)
 
             if client.recv_stderr_ready():
-                print('Stderr:', str(client.recv_stderr(500)))
+                logger.error('Stderr: %s', str(client.recv_stderr(float(config['DEFAULT']['LOG_LINE_MAX']))))
 
-            time.sleep(0.05)
+            time.sleep(float(config['DEFAULT']['LOG_WATCH_INTERVAL']))
 
-        transport.close()
         client.close()
+        transport.close()
 
     def connect(self):
-        ''' Connect to router with given parameters and call watcher '''
+        ''' Connect to the router and call watch_log()
+
+            Return values:
+                0: Disconnected
+                1: Unable to connect
+                2: Authentication failed
+        '''
+
         self.client = paramiko.SSHClient()
         self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
@@ -224,49 +250,56 @@ class Watch(object):
             self.client.connect(self.hostname,
                                 username=self.username_auditor,
                                 password=self.passw)
-        except paramiko.AuthenticationException:
-            print('Auth failed for', self.username_auditor + '@' +
-                  self.hostname + '\n')
-            return 1
         except socket.error:
-            print('Could not connect to', self.hostname + '\n')
+            logger.error('Socket error: Could not connect to %s', self.hostname)
+            return 1
+        except paramiko.AuthenticationException:
+            logger.error('Auth failed for %s@%s',
+                          self.username_auditor,
+                          self.hostname)
+            #      self.hostname)
             return 2
 
-        connect_log = 'Connected to ' + self.hostname + \
-                      ' at ' + time.ctime() + '\n'
-
-        with open('UNKNOWN' + '_diff.txt', 'a+') as file_diff:
-            print(connect_log)
-            print(connect_log, file=file_diff)
+        logger.info('Connected to %s as %s',
+                     self.hostname,
+                     self.username_auditor)
 
         self.watch_log()
 
         self.client.close()
 
+        logger.warning('Disconnected from %s as %s',
+                        self.hostname,
+                        self.username_auditor)
+
         return 0
 
     def watch(self):
-        ''' Call this as new thread '''
+        ''' Call this as new thread.
+
+            Connects to the router and tries to reconnect to the router on
+            recoverable error.
+        '''
         while True:
-            if self.connect():
+            if self.connect() in [0, 1]:
+                logger.warning('Will keep trying to reconnect every %s '
+                                'seconds to %s as %s',
+                                config['DEFAULT']['RECONNECT_INTERVAL'],
+                                self.hostname,
+                                self.username_auditor)
+
+                time.sleep(config['DEFAULT']['RECONNECT_INTERVAL'])
+            else:
                 break
-
-            disconnect_log = 'Disconnected ' + self.hostname + \
-                             ' at ' + time.ctime() + '\n' + \
-                             'Will keep trying to reconnect ' + \
-                             'every several seconds\n'
-
-            with open('UNKNOWN' + '_diff.txt', 'a+') as file_diff:
-                print(disconnect_log)
-                print(disconnect_log, file=file_diff)
-
-            time.sleep(0.3)
 
 
 def main():
+    initialize_logging()
+
     watch = Watch('192.168.56.26', '', 'admin')
     watch.watch()
 
 
 if __name__ == '__main__':
     main()
+
