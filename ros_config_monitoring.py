@@ -219,7 +219,11 @@ class Config(object):
             only_diff_file.write(full_diff_text)
 
         logger.info(full_diff_text)
-        logger_email.info(full_diff_text)
+        if config['DEFAULT']['enable_email'] != 'false':
+            try:
+                logger_email.info(full_diff_text)
+            except ConnectionRefusedError:
+                logger.warning('Failed to send email.')
 
         create_backup(self.filename_config)
         with open(self.filename_config, 'w') as file_config:

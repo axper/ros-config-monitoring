@@ -1,22 +1,16 @@
 ros-config-monitoring
 =====================
 
-Tracks configuration changes in MikroTik RouterOS machines.
-When a configuration change is made, the diff of that change is stored in a file.
-Each RouterOS user has has his own file which contains detailed information about the changes they have made.
-Later on from each user's diff file a PDF report can be generated.
+Tracks configuration changes in MikroTik RouterOS machine.
+When a configuration change is made, an email is sent to an address specified in `config.txt`.
 
 Features
 --------
 
-* Winbox-like gui
-* Automatically reconnects when the router is rebooted
-* Monitor multiple routers at once
-* Every file is automatically backed up
-* PDF report generation for each user's changes
+* Sends an email when config is changed
 * Works on both Linux and Windows
-* Logs to both the main window and `ros_config_monitoring_log.txt` file
-* Minimize to tray by clicking on "router" icon in tray
+* Configuration file is automatically backed up upon change
+* Automatically reconnects when the router is rebooted
 
 Building on Windows
 ===================
@@ -33,55 +27,28 @@ http://www.voidspace.org.uk/python/modules.shtml#pycrypto
 
     pip install paramiko
 
-5. Download/Install PyQt5 from:
-http://www.riverbankcomputing.co.uk/software/pyqt/download5
-6. Run the `build.cmd` script
-
-The `build.cmd` script will create a directory `RouterOS Configuration Monitoring` which will contain all the necessary files.
-
-PDF generation on Windows
--------------------------
-
-If you want to also generate PDF reports:
-
-1. Open the `users.xml` file in your favourite text editor and add the usernames and real names of all your router users. Follow the schema.
-2. Download Miktex portable installer from: (click "Other downloads" at the bottom)
-http://miktex.org/download
-3. Install/Extract Miktex portable into a new directory called `miktex_portable`
-4. Move the `miktex_portable` directory to `RouterOS Configuration Monitoring` directory as a subdirectory
-
-The first time only when generating PDF it will take quite a long time as Miktex will be downloading necessary LaTeX packages from the internet. Miktex will promt to download necessary packages, for convenience uncheck the "Always show this dialog before installing packages" box at the bottom and click "Install".
+5. ...
 
 Usage
 =====
 
-To start monitoring, first edit the `users.xml` file and provide names of all router users. If a user isn't specified, a report won't be generated for him/her!
-Run `ros_config_monitoring.exe` and connect to the router(s).
-The program will start listening for configuration changes in the memory log of the router.
-When a change is made, it will be appended to `<username>_diff.txt` file.
-
-To minimize the program to tray, click on the "router" icon in the system tray.
-
-Generating PDF reports
-----------------------
-
-When you click "Generate PDF Reports", the program will create PDF for each user specified in `users.txt` it finds a diff file. The resulting PDF will be opened in the system's default PDF viewer for your convenience.
-
-If you know some LaTeX, you can customize the report text and style in `report.tex`.
+To start monitoring, first edit the `config.txt` file and set the `mail\_to`, `mail\_from` and `mail\_server` variables. If you prefer not to receive emails, set `enable_email = false` in `config.txt`.
+Run `./ros\_config\_monitoring.py` and specify the ip/username/password.
+The program will start listening for configuration changes by listening to the action `memory` log of the router.
+When a change is made, the program will send an email to specified addresses. It will also append the change line to `log.txt` file (or other name specified in `config.txt`).
+Leave the program/terminal running or background the process.
+To exit the program, press `Ctrl+C`.
 
 Troubleshooting
 ===============
 
-* If the program crashes, look for the `ros_config_monitoring_log.txt` file. Open it and try to figure out what went wrong. If you can't, send that file to me with your system details and the exact steps that led to crash.
 * For the program to work, the configuration logging of the `info` topic to memory must be enabled in `/system logging` (which is the default).
-Be wary of users who might disable this and change whatever they like without this program detecting!
-* A PDF viewer must be present on the system. I recommend Sumatra PDF, a very small and very fast PDF viewer:
-http://blog.kowalczyk.info/software/sumatrapdf/download-free-pdf-viewer.html
+Be wary of users who might disable this and make changes without this program detecting it!
 
 How it works
 ============
 
-* This program monitors specifically which RouterOS user makes changes in configuration by watching the router log by `/log print follow-only` command.
+* This program monitors specifically which RouterOS user makes changes in configuration by watching the router log using the `/log print follow-only` command.
 * When connecting first time, the program will save the whole configuration locally. User will be notified about this, ignore this output and continue the IP/username/password input for the next machine (if desired).
 * When it detects a configuration change in the router log, it connects again, fetches new configuration, diffs the old and new configuration and appends the diff to the diff file of the user who made the configuration change.
 * When configuration was changes while the program wasn't monitoring, the changes will be written for the user called `UNKNOWN`.
