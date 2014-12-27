@@ -31,30 +31,68 @@ import logging
 import logging.handlers
 import sys
 import configparser
+import getpass
 
 import paramiko
 
 
+CONFIG_FILE_NAME = 'config.txt'
+ONLY_DIFF_FILE_NAME = 'diff.txt'
+
 config = configparser.ConfigParser()
-config.read('config.txt')
+
+try:
+    with open(CONFIG_FILE_NAME) as config_file:
+        config.readfp(config_file)
+
+except FileNotFoundError:
+    logger.warning(CONFIG_FILE_NAME, 'was not found. Creating new file with defaults.')
+
+    config['DEFAULT'] = {
+        'LOG_FILE_NAME' : 'log.txt',
+        'LOG_LINE_MAX' : '1000',
+        'LOG_WATCH_INTERVAL' : '1',
+        'RECONNECT_INTERVAL' : '1',
+        'MAIL_SERVER' : '192.168.1.1',
+        'MAIL_FROM' : 'routerconfigmonitor@example.com',
+        'MAIL_TO' : 'destination1@example.com destination2@example.com',
+        'MAIL_SUBJECT' : 'Router Config Monitoring',
+    }
+
+    with open(CONFIG_FILE_NAME, 'w') as config_file:
+        config.write(config_file)
+
 
 
 def initialize_logging():
     global logger
-    logger = logging.getLogger(__name__)
+    global logger_email
+
+    logger = logging.getLogger(__name__ + '.normal')
     logger.setLevel(logging.DEBUG)
+    logger_email = logging.getLogger(__name__ + '.email')
+    logger_email.setLevel(logging.DEBUG)
+
 
     handler_stdout = logging.StreamHandler(sys.stdout)
     handler_stdout.setLevel(logging.DEBUG)
-    handler_log_file = logging.FileHandler(config['DEFAULT']['LOG_FILE_NAME'])
-    handler_log_file.setLevel(logging.DEBUG)
-    handler_email = logging.handlers.SMTPHandler(config['DEFAULT']['MAIL_SERVER'],
-                                                 config['DEFAULT']['MAIL_FROM'],
-                                                 config['DEFAULT']['MAIL_TO'],
-                                                 config['DEFAULT']['MAIL_SUBJECT'])
-
+    handler_stdout.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
     logger.addHandler(handler_stdout)
-    logger.addHandler(handler_log_file)
+
+    for log_file in config['DEFAULT']['LOG_FILE_NAME'].split():
+        handler_log_file = logging.FileHandler(log_file)
+        handler_log_file.setLevel(logging.DEBUG)
+        handler_log_file.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
+        logger.addHandler(handler_log_file)
+
+
+    for email in config['DEFAULT']['MAIL_TO'].split():
+        handler_email = logging.handlers.SMTPHandler(config['DEFAULT']['MAIL_SERVER'],
+                                                     config['DEFAULT']['MAIL_FROM'],
+                                                     email,
+                                                     config['DEFAULT']['MAIL_SUBJECT'])
+        handler_email.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
+        logger_email.addHandler(handler_email)
 
 
 def create_backup(filename):
@@ -175,9 +213,13 @@ class Config(object):
 
         full_diff_text = self.hostname + ' ' + date_and_time + '\n' + \
                          log_line + '\n' + \
-                         diff_result
+                         diff_result + '\n'
+
+        with open(ONLY_DIFF_FILE_NAME, 'a') as only_diff_file:
+            only_diff_file.write(full_diff_text)
 
         logger.info(full_diff_text)
+        logger_email.info(full_diff_text)
 
         create_backup(self.filename_config)
         with open(self.filename_config, 'w') as file_config:
@@ -187,7 +229,7 @@ class Config(object):
 class Watch(object):
     ''' Router log watcher
     '''
-    def __init__(self, hostname, passw, username_auditor):
+    def __init__(self, hostname, username_auditor, passw):
         self.hostname = hostname
         self.username_auditor = username_auditor
         self.passw = passw
@@ -221,13 +263,14 @@ class Watch(object):
 
         while not client.exit_status_ready():
             if client.recv_ready():
-                recovered = client.recv(float(config['DEFAULT']['LOG_LINE_MAX']))
+                recovered = client.recv(int(config['DEFAULT']['LOG_LINE_MAX']))
 
                 for line in recovered.splitlines():
                     self.log_line_processor(line)
 
             if client.recv_stderr_ready():
-                logger.error('Stderr: %s', str(client.recv_stderr(float(config['DEFAULT']['LOG_LINE_MAX']))))
+                recover_length = float(config['DEFAULT']['LOG_LINE_MAX'])
+                logger.error('Stderr: %s', str(client.recv_stderr(recover_length)))
 
             time.sleep(float(config['DEFAULT']['LOG_WATCH_INTERVAL']))
 
@@ -257,7 +300,6 @@ class Watch(object):
             logger.error('Auth failed for %s@%s',
                           self.username_auditor,
                           self.hostname)
-            #      self.hostname)
             return 2
 
         logger.info('Connected to %s as %s',
@@ -283,12 +325,12 @@ class Watch(object):
         while True:
             if self.connect() in [0, 1]:
                 logger.warning('Will keep trying to reconnect every %s '
-                                'seconds to %s as %s',
-                                config['DEFAULT']['RECONNECT_INTERVAL'],
-                                self.hostname,
-                                self.username_auditor)
+                               'seconds to %s as %s',
+                               config['DEFAULT']['RECONNECT_INTERVAL'],
+                               self.hostname,
+                               self.username_auditor)
 
-                time.sleep(config['DEFAULT']['RECONNECT_INTERVAL'])
+                time.sleep(float(config['DEFAULT']['RECONNECT_INTERVAL']))
             else:
                 break
 
@@ -296,8 +338,9 @@ class Watch(object):
 def main():
     initialize_logging()
 
-    watch = Watch('192.168.56.26', '', 'admin')
-    watch.watch()
+    Watch(input('Hostname: '),
+          input('Username: '),
+          getpass.getpass()).watch()
 
 
 if __name__ == '__main__':
